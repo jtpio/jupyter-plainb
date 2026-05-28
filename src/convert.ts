@@ -1,14 +1,15 @@
-import type { Contents } from '@jupyterlab/services';
+import type { Contents, KernelSpec } from '@jupyterlab/services';
+import type { Notebook } from 'plainb';
 import { PARSERS } from './parsers';
 import type { IRule, IKernelspec } from './parsers';
 
-const DEFAULT_KERNELSPEC: IKernelspec = {
+export const DEFAULT_KERNELSPEC: IKernelspec = {
   name: 'xpython',
   display_name: 'Python 3.13 (XPython)',
   language: 'python'
 };
 
-function extractKernelspecFromText(text: string): IKernelspec | null {
+export function extractKernelspecFromText(text: string): IKernelspec | null {
   const lines = text.replace(/\r\n/g, '\n').split('\n');
 
   const isCommentStyle = !!lines[0]?.match(/^#\s*---\s*$/);
@@ -61,7 +62,7 @@ function extractKernelspecFromText(text: string): IKernelspec | null {
       }
       const m = content.match(/^(\w+):\s*(.+)$/);
       if (m) {
-        ks[m[1]] = m[2];
+        ks[m[1]] = m[2].replace(/^["']|["']$/g, '');
       }
     }
   }
@@ -71,11 +72,48 @@ function extractKernelspecFromText(text: string): IKernelspec | null {
   return null;
 }
 
+export function kernelspecFromLanguage(
+  specs: KernelSpec.ISpecModels | null,
+  language: string
+): IKernelspec | null {
+  if (!specs || !specs.kernelspecs) {
+    return null;
+  }
+  const normLang = language.toLowerCase();
+
+  const defaultSpecName = specs.default;
+  if (defaultSpecName) {
+    const defaultSpec = specs.kernelspecs[defaultSpecName];
+    if (defaultSpec && defaultSpec.language.toLowerCase() === normLang) {
+      return {
+        name: defaultSpec.name,
+        display_name: defaultSpec.display_name,
+        language: defaultSpec.language
+      };
+    }
+  }
+
+  for (const name of Object.keys(specs.kernelspecs)) {
+    const spec = specs.kernelspecs[name];
+    if (spec && spec.language.toLowerCase() === normLang) {
+      return {
+        name: spec.name,
+        display_name: spec.display_name,
+        language: spec.language
+      };
+    }
+  }
+
+  return null;
+}
+
 export async function convertFile(
   contents: Contents.IManager,
   filePath: string,
   parser: (text: string) => object,
-  defaultKernelspec?: IKernelspec
+  defaultKernelspec?: IKernelspec,
+  specs?: KernelSpec.ISpecModels | null,
+  outPath?: string
 ): Promise<void> {
   const model = await contents.get(filePath, {
     type: 'file',
@@ -84,18 +122,27 @@ export async function convertFile(
   });
   const text = model.content as string;
   const notebook = parser(text) as any;
+
   if (!notebook.metadata?.kernelspec) {
     notebook.metadata = notebook.metadata ?? {};
+    const language = notebook.metadata?.language_info?.name || 'python';
     const kernelspec =
       extractKernelspecFromText(text) ??
       defaultKernelspec ??
-      DEFAULT_KERNELSPEC;
-    notebook.metadata.kernelspec = kernelspec;
-    if (!notebook.metadata.language_info) {
-      notebook.metadata.language_info = { name: kernelspec.language };
+      kernelspecFromLanguage(specs ?? null, language) ??
+      (language.toLowerCase() === 'python' ? DEFAULT_KERNELSPEC : undefined);
+    if (kernelspec) {
+      notebook.metadata.kernelspec = kernelspec;
+      if (!notebook.metadata.language_info) {
+        notebook.metadata.language_info = { name: kernelspec.language };
+      }
+    } else {
+      if (!notebook.metadata.language_info) {
+        notebook.metadata.language_info = { name: language };
+      }
     }
   }
-  const notebookPath = filePath.replace(/\.(py|md)$/, '.ipynb');
+  const notebookPath = outPath ?? filePath.replace(/\.(py|md)$/, '.ipynb');
   await contents.save(notebookPath, {
     type: 'notebook',
     format: 'json',
@@ -103,11 +150,58 @@ export async function convertFile(
   });
 }
 
+/**
+ * Convert a .ipynb notebook to a plain text format using a serializer.
+ */
+export async function convertNotebookToPlainText(
+  contents: Contents.IManager,
+  notebookPath: string,
+  serializer: (notebook: Notebook) => string,
+  targetExtension: string,
+  outPath?: string
+): Promise<void> {
+  const model = await contents.get(notebookPath, {
+    type: 'notebook',
+    format: 'json',
+    content: true
+  });
+  const notebook = model.content as any;
+
+  // Normalize cell sources to string[] as expected by plainb serializers.
+  // The contents API may return source as either string or string[].
+  if (notebook.cells) {
+    for (const cell of notebook.cells) {
+      if (typeof cell.source === 'string') {
+        const lines = cell.source.split('\n');
+        cell.source = lines.map((line: string, i: number) =>
+          i < lines.length - 1 ? line + '\n' : line
+        );
+        if (
+          cell.source.length > 1 &&
+          cell.source[cell.source.length - 1] === ''
+        ) {
+          cell.source.pop();
+        }
+      }
+    }
+  }
+
+  const text = serializer(notebook as Notebook);
+  const plainPath =
+    outPath ?? notebookPath.replace(/\.ipynb$/, targetExtension);
+  await contents.save(plainPath, {
+    type: 'file',
+    format: 'text',
+    content: text
+  });
+}
+
 export async function convertIfMissing(
   contents: Contents.IManager,
   filePath: string,
   parser: (text: string) => object,
-  defaultKernelspec?: IKernelspec
+  defaultKernelspec?: IKernelspec,
+  specs?: KernelSpec.ISpecModels | null
 ): Promise<void> {
   const notebookPath = filePath.replace(/\.(py|md)$/, '.ipynb');
   try {
@@ -117,7 +211,7 @@ export async function convertIfMissing(
     /* empty */
   }
   try {
-    await convertFile(contents, filePath, parser, defaultKernelspec);
+    await convertFile(contents, filePath, parser, defaultKernelspec, specs);
   } catch (e) {
     console.error(`ptjnb: failed to convert "${filePath}"`, e);
   }
@@ -127,7 +221,8 @@ async function walkDir(
   contents: Contents.IManager,
   path: string,
   parser: (text: string) => object,
-  defaultKernelspec?: IKernelspec
+  defaultKernelspec?: IKernelspec,
+  specs?: KernelSpec.ISpecModels | null
 ): Promise<void> {
   let dir: Contents.IModel;
   try {
@@ -141,12 +236,18 @@ async function walkDir(
   }
   for (const item of dir.content as Contents.IModel[]) {
     if (item.type === 'directory') {
-      await walkDir(contents, item.path, parser, defaultKernelspec);
+      await walkDir(contents, item.path, parser, defaultKernelspec, specs);
     } else if (
       item.type === 'file' &&
       (item.name.endsWith('.py') || item.name.endsWith('.md'))
     ) {
-      await convertIfMissing(contents, item.path, parser, defaultKernelspec);
+      await convertIfMissing(
+        contents,
+        item.path,
+        parser,
+        defaultKernelspec,
+        specs
+      );
     }
   }
 }
@@ -154,7 +255,8 @@ async function walkDir(
 export async function autoConvert(
   contents: Contents.IManager,
   rules: IRule[],
-  defaultKernelspec?: IKernelspec
+  defaultKernelspec?: IKernelspec,
+  specs?: KernelSpec.ISpecModels | null
 ): Promise<void> {
   for (const rule of rules) {
     const parser = PARSERS[rule.parser];
@@ -162,6 +264,6 @@ export async function autoConvert(
       console.warn(`ptjnb: unknown parser "${rule.parser}"`);
       continue;
     }
-    await walkDir(contents, rule.dir, parser, defaultKernelspec);
+    await walkDir(contents, rule.dir, parser, defaultKernelspec, specs);
   }
 }
