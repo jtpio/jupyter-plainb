@@ -1,4 +1,5 @@
 import type { Contents, KernelSpec } from '@jupyterlab/services';
+import { detectFormat, parseFormat } from 'plainb';
 import type { Notebook } from 'plainb';
 import { PARSERS } from './parsers';
 import type { IRule, IKernelspec } from './parsers';
@@ -122,6 +123,50 @@ export async function convertFile(
   });
   const text = model.content as string;
   const notebook = parser(text) as any;
+
+  if (!notebook.metadata?.kernelspec) {
+    notebook.metadata = notebook.metadata ?? {};
+    const language = notebook.metadata?.language_info?.name || 'python';
+    const kernelspec =
+      extractKernelspecFromText(text) ??
+      defaultKernelspec ??
+      kernelspecFromLanguage(specs ?? null, language) ??
+      (language.toLowerCase() === 'python' ? DEFAULT_KERNELSPEC : undefined);
+    if (kernelspec) {
+      notebook.metadata.kernelspec = kernelspec;
+      if (!notebook.metadata.language_info) {
+        notebook.metadata.language_info = { name: kernelspec.language };
+      }
+    } else {
+      if (!notebook.metadata.language_info) {
+        notebook.metadata.language_info = { name: language };
+      }
+    }
+  }
+  const notebookPath = outPath ?? filePath.replace(/\.(py|md)$/, '.ipynb');
+  await contents.save(notebookPath, {
+    type: 'notebook',
+    format: 'json',
+    content: notebook
+  });
+}
+
+export async function convertFileAuto(
+  contents: Contents.IManager,
+  filePath: string,
+  defaultKernelspec?: IKernelspec,
+  specs?: KernelSpec.ISpecModels | null,
+  outPath?: string
+): Promise<void> {
+  const model = await contents.get(filePath, {
+    type: 'file',
+    format: 'text',
+    content: true
+  });
+  const text = model.content as string;
+  const ext = filePath.slice(filePath.lastIndexOf('.'));
+  const format = detectFormat(text, ext);
+  const notebook = parseFormat(text, format) as any;
 
   if (!notebook.metadata?.kernelspec) {
     notebook.metadata = notebook.metadata ?? {};

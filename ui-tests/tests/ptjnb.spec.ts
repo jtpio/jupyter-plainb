@@ -22,12 +22,15 @@ function fileItem(page: Page, name: string) {
   return page.locator('.jp-DirListing-item').filter({ hasText: name }).first();
 }
 
-async function openConvertSubmenu(page: Page, fileName: string): Promise<void> {
+async function clickConvertToNotebook(
+  page: Page,
+  fileName: string
+): Promise<void> {
   await fileItem(page, fileName).click({ button: 'right' });
   await page
     .locator('.lm-Menu-itemLabel')
     .filter({ hasText: 'Convert to Notebook' })
-    .hover();
+    .click();
 }
 
 async function openPlainTextSubmenu(
@@ -44,7 +47,7 @@ async function openPlainTextSubmenu(
 async function openWithNotebook(
   page: Page,
   fileName: string,
-  factoryLabel: string
+  factoryLabel: string | RegExp
 ): Promise<void> {
   await fileItem(page, fileName).click({ button: 'right' });
   await page
@@ -84,11 +87,7 @@ test.describe('ptjnb', () => {
   });
 
   test('converts .py to .ipynb when no sibling exists', async ({ page }) => {
-    await openConvertSubmenu(page, 'complicated.py');
-    await page
-      .locator('.lm-Menu-itemLabel')
-      .filter({ hasText: 'Percent format (.py)' })
-      .click();
+    await clickConvertToNotebook(page, 'complicated.py');
     await expect(fileItem(page, 'complicated.ipynb')).toBeVisible({
       timeout: CONVERT_TIMEOUT
     });
@@ -102,11 +101,7 @@ test.describe('ptjnb', () => {
     await expect(fileItem(page, 'numpy_demo.ipynb')).toBeVisible({
       timeout: CONVERT_TIMEOUT
     });
-    await openConvertSubmenu(page, 'numpy_demo.py');
-    await page
-      .locator('.lm-Menu-itemLabel')
-      .filter({ hasText: 'Percent format (.py)' })
-      .click();
+    await clickConvertToNotebook(page, 'numpy_demo.py');
     await expect(page.locator('.jp-Dialog-header')).toContainText(
       'Overwrite notebook?'
     );
@@ -120,11 +115,7 @@ test.describe('ptjnb', () => {
     await expect(fileItem(page, 'numpy_demo.ipynb')).toBeVisible({
       timeout: CONVERT_TIMEOUT
     });
-    await openConvertSubmenu(page, 'numpy_demo.py');
-    await page
-      .locator('.lm-Menu-itemLabel')
-      .filter({ hasText: 'Percent format (.py)' })
-      .click();
+    await clickConvertToNotebook(page, 'numpy_demo.py');
     await expect(page.locator('.jp-Dialog')).toBeVisible();
     await page.locator('.jp-Dialog-footer .jp-mod-reject').click();
     await expect(page.locator('.jp-Dialog')).toBeHidden();
@@ -148,9 +139,7 @@ test.describe('ptjnb open-with', () => {
       .filter({ hasText: 'Open With' })
       .hover();
     await expect(
-      page
-        .locator('.lm-Menu-itemLabel')
-        .filter({ hasText: 'Notebook (Percent .py)' })
+      page.locator('.lm-Menu-itemLabel').filter({ hasText: /^Notebook$/ })
     ).toBeVisible();
   });
 
@@ -161,7 +150,7 @@ test.describe('ptjnb open-with', () => {
     await expect(fileItem(page, 'numpy_demo.py')).toBeVisible({
       timeout: FILE_BROWSER_TIMEOUT
     });
-    await openWithNotebook(page, 'numpy_demo.py', 'Notebook (Percent .py)');
+    await openWithNotebook(page, 'numpy_demo.py', /^Notebook$/);
 
     await expect(page.locator('.jp-NotebookPanel-toolbar')).toBeVisible({
       timeout: CONVERT_TIMEOUT
@@ -178,11 +167,7 @@ test.describe('ptjnb open-with', () => {
     await expect(fileItem(page, 'image_processing.py')).toBeVisible({
       timeout: FILE_BROWSER_TIMEOUT
     });
-    await openWithNotebook(
-      page,
-      'image_processing.py',
-      'Notebook (Sphinx Gallery .py)'
-    );
+    await openWithNotebook(page, 'image_processing.py', /^Notebook$/);
 
     await expect(page.locator('.jp-NotebookPanel-toolbar')).toBeVisible({
       timeout: CONVERT_TIMEOUT
@@ -199,11 +184,7 @@ test.describe('ptjnb open-with', () => {
     await expect(fileItem(page, 'classic_demo.md')).toBeVisible({
       timeout: FILE_BROWSER_TIMEOUT
     });
-    await openWithNotebook(
-      page,
-      'classic_demo.md',
-      'Notebook (Classic Markdown .md)'
-    );
+    await openWithNotebook(page, 'classic_demo.md', /^Notebook$/);
 
     await expect(page.locator('.jp-NotebookPanel-toolbar')).toBeVisible({
       timeout: CONVERT_TIMEOUT
@@ -220,7 +201,7 @@ test.describe('ptjnb open-with', () => {
     await expect(fileItem(page, 'myst_demo.md')).toBeVisible({
       timeout: FILE_BROWSER_TIMEOUT
     });
-    await openWithNotebook(page, 'myst_demo.md', 'Notebook (MyST .md)');
+    await openWithNotebook(page, 'myst_demo.md', /^Notebook$/);
 
     await expect(page.locator('.jp-NotebookPanel-toolbar')).toBeVisible({
       timeout: CONVERT_TIMEOUT
@@ -256,11 +237,7 @@ test.describe('ptjnb export', () => {
     const pyFile = fileItem(page, 'complicated.py');
     await expect(pyFile).toBeVisible({ timeout: FILE_BROWSER_TIMEOUT });
 
-    await openConvertSubmenu(page, 'complicated.py');
-    await page
-      .locator('.lm-Menu-itemLabel')
-      .filter({ hasText: 'Percent format (.py)' })
-      .click();
+    await clickConvertToNotebook(page, 'complicated.py');
 
     // If complicated.ipynb already exists from a previous test, dismiss the overwrite dialog
     const overwriteNbDialog = page.locator('.jp-Dialog-header');

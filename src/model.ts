@@ -2,7 +2,8 @@ import { NotebookModel, NotebookModelFactory } from '@jupyterlab/notebook';
 import { DocumentRegistry } from '@jupyterlab/docregistry';
 import { Contents, KernelSpec } from '@jupyterlab/services';
 import type { ISharedNotebook } from '@jupyter/ydoc';
-import type { Notebook } from 'plainb';
+import { detectFormat, parseFormat, serializeFormat } from 'plainb';
+import type { PlainbFormat } from 'plainb';
 import {
   DEFAULT_KERNELSPEC,
   extractKernelspecFromText,
@@ -10,19 +11,19 @@ import {
 } from './convert';
 
 /**
- * A custom NotebookModel that parses and serializes from/to plain text.
+ * A custom NotebookModel that parses and serializes from/to plain text. The
+ * concrete format is auto-detected from the file extension and content, and
+ * remembered so the file round-trips back to the same format on save.
  */
 export class PlainTextNotebookModel extends NotebookModel {
   constructor(
     options: NotebookModel.IOptions & {
-      parser: (text: string) => object;
-      serializer: (notebook: Notebook) => string;
+      ext: string;
       specs?: KernelSpec.ISpecModels | null;
     }
   ) {
     super(options);
-    this._parser = options.parser;
-    this._serializer = options.serializer;
+    this._ext = options.ext;
     this._specs = options.specs ?? null;
   }
 
@@ -49,11 +50,12 @@ export class PlainTextNotebookModel extends NotebookModel {
       }
     }
 
-    return this._serializer(json as unknown as Notebook);
+    return serializeFormat(json, this._format);
   }
 
   fromString(value: string): void {
-    const notebook = this._parser(value) as any;
+    this._format = detectFormat(value, this._ext);
+    const notebook = parseFormat(value, this._format) as any;
 
     // Ensure kernelspec is set
     if (!notebook.metadata?.kernelspec) {
@@ -78,8 +80,8 @@ export class PlainTextNotebookModel extends NotebookModel {
     super.fromJSON(notebook);
   }
 
-  private _parser: (text: string) => object;
-  private _serializer: (notebook: Notebook) => string;
+  private _ext: string;
+  private _format: PlainbFormat = 'percent';
   private _specs: KernelSpec.ISpecModels | null;
 }
 
@@ -90,15 +92,13 @@ export class PlainTextNotebookModelFactory extends NotebookModelFactory {
   constructor(
     options: NotebookModelFactory.IOptions & {
       name: string;
-      parser: (text: string) => object;
-      serializer: (notebook: Notebook) => string;
+      ext: string;
       specs?: KernelSpec.ISpecModels | null;
     }
   ) {
     super(options);
     this._name = options.name;
-    this._parser = options.parser;
-    this._serializer = options.serializer;
+    this._ext = options.ext;
     this._specs = options.specs ?? null;
   }
 
@@ -119,14 +119,12 @@ export class PlainTextNotebookModelFactory extends NotebookModelFactory {
   ): PlainTextNotebookModel {
     return new PlainTextNotebookModel({
       ...options,
-      parser: this._parser,
-      serializer: this._serializer,
+      ext: this._ext,
       specs: this._specs
     });
   }
 
   private _name: string;
-  private _parser: (text: string) => object;
-  private _serializer: (notebook: Notebook) => string;
+  private _ext: string;
   private _specs: KernelSpec.ISpecModels | null;
 }
